@@ -23,6 +23,12 @@ import {
 } from '@/lib/mock';
 import {exportUserPackage} from '@/lib/export-package';
 import {
+  exportExamSetPackage,
+  isExamSetPackage,
+  parseExamSetPackageText,
+  resolveCategoryForSetImport,
+} from '@/lib/exam-set-package';
+import {
   downloadQuestionImportJsonTemplate,
   downloadQuestionImportTemplate,
   exportQuestionsExcel,
@@ -175,6 +181,7 @@ export default function AdminWorkspace({
   const [exportTrayOpen, setExportTrayOpen] = useState(false);
   const [importDragging, setImportDragging] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const setPackageInputRef = useRef<HTMLInputElement>(null);
   const metaTouchedRef = useRef(false);
   const [importDupPrompt, setImportDupPrompt] = useState<{
     fresh: ImportQuestionDraft[];
@@ -754,6 +761,107 @@ export default function AdminWorkspace({
     alert(`นำเข้าสำเร็จ${parts.length ? ` — ${parts.join(' · ')}` : ''}${skipNote}${errNote}`);
   }
 
+  function applyImportedExamSet(data: {
+    set: {
+      title: string;
+      subject: string;
+      level: string;
+      topic: string;
+      time: number;
+      description: string;
+      icon: string;
+      tint: string;
+      cover?: string;
+      coverCustom?: boolean;
+      popular?: number;
+    };
+    questions: ImportQuestionDraft[];
+    skipped: number;
+    errors: string[];
+  }) {
+    const resolved = resolveCategoryForSetImport(data.set, categories);
+    if (resolved.categories !== categories) {
+      setCategories(resolved.categories);
+    }
+    const category =
+      resolved.categories.find((c) => c.id === resolved.categoryId) ||
+      resolved.categories[0];
+    const setId = Math.max(0, ...sets.map((s) => s.id)) + 1;
+    let nextQId = Math.max(0, ...questions.map((q) => q.id)) + 1;
+    const questionIds: number[] = [];
+    const incoming: Question[] = data.questions.map((draft) => {
+      const id = nextQId++;
+      questionIds.push(id);
+      const skills = getQuestionSkills(draft);
+      return {
+        ...draft,
+        id,
+        setIds: [setId],
+        topic: undefined,
+        skill: undefined,
+        skills: skills.length ? skills : ['ความรู้ ความจำ'],
+      };
+    });
+    const cover = data.set.cover || category?.defaultCover || '/covers/categories/onet.png';
+    const created: ExamSet = {
+      id: setId,
+      title: data.set.title,
+      subject: data.set.subject || 'คณิต',
+      level: data.set.level || 'ม.1',
+      topic: data.set.topic || data.set.title,
+      count: questionIds.length,
+      time: data.set.time || 15,
+      popular: data.set.popular || 0,
+      icon: data.set.icon || '✦',
+      tint: data.set.tint || 'orange',
+      description: data.set.description || `ชุดกิจกรรม ${data.set.title}`,
+      cover,
+      categoryId: resolved.categoryId,
+      coverCustom: !!data.set.coverCustom,
+      questionIds,
+    };
+    setQuestions((prev) => [...incoming, ...prev]);
+    setSets((prev) => [...prev, created]);
+    metaTouchedRef.current = false;
+    setActiveSetId(setId);
+    setPendingAdd([]);
+    setPendingRemove([]);
+    setDraftOrder(questionIds);
+    setExportSetId(setId);
+    setDraftMeta(draftMetaFromSet(created, resolved.categories));
+    setSelectedBankIds([]);
+    setDirty(true);
+    const skipNote = data.skipped ? `\nข้าม ${data.skipped} ข้อจากไฟล์` : '';
+    const errNote = data.errors.length
+      ? `\n\nหมายเหตุ:\n${data.errors.slice(0, 5).join('\n')}`
+      : '';
+    alert(
+      `นำเข้าชุดกิจกรรมแล้ว\n“${created.title}” · ${questionIds.length} ข้อ${skipNote}${errNote}`,
+    );
+  }
+
+  async function handleImportExamSetFile(file: File) {
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      alert('ไฟล์ชุดกิจกรรมต้องเป็น .json');
+      return;
+    }
+    setImporting(true);
+    try {
+      const parsed = parseExamSetPackageText(await file.text());
+      if (!parsed.ok) {
+        alert(parsed.error);
+        return;
+      }
+      applyImportedExamSet(parsed.data);
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'นำเข้าชุดไม่สำเร็จ');
+    } finally {
+      setImporting(false);
+      if (setPackageInputRef.current) setPackageInputRef.current.value = '';
+    }
+  }
+
   async function handleImportFile(file: File) {
     const name = file.name.toLowerCase();
     const isJson = name.endsWith('.json');
@@ -765,8 +873,29 @@ export default function AdminWorkspace({
     }
     setImporting(true);
     try {
+      let jsonText = '';
+      if (isJson) {
+        jsonText = await file.text();
+        let parsedJson: unknown;
+        try {
+          parsedJson = JSON.parse(jsonText);
+        } catch {
+          alert('ไฟล์ JSON ไม่ถูกต้อง');
+          return;
+        }
+        if (isExamSetPackage(parsedJson)) {
+          const parsed = parseExamSetPackageText(jsonText);
+          if (!parsed.ok) {
+            alert(parsed.error);
+            return;
+          }
+          applyImportedExamSet(parsed.data);
+          setImportTrayOpen(false);
+          return;
+        }
+      }
       const result = isJson
-        ? parseQuestionsFromJsonText(await file.text())
+        ? parseQuestionsFromJsonText(jsonText)
         : await parseQuestionsFromExcel(await file.arrayBuffer());
       if (!result.questions.length) {
         alert(
@@ -1431,15 +1560,48 @@ export default function AdminWorkspace({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-lg font-black">จัดชุดกิจกรรม</h2>
-              <p className="mt-1 text-xs text-muted">เลือกชุด · ติ๊กคำถามจากตารางด้านล่าง · กดยืนยันเพื่อเพิ่มเข้าชุด</p>
+              <p className="mt-1 text-xs text-muted">
+                เลือกชุด · ติ๊กคำถามจากตาราง · หรือ Import/Export ทั้งชุดเป็น JSON
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowNewSet((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-xl bg-[#e30613] px-3 py-2 text-xs font-bold text-white"
-            >
-              <Plus size={14} /> เพิ่มชุดใหม่
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={setPackageInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="sr-only"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleImportExamSetFile(file);
+                }}
+              />
+              <button
+                type="button"
+                disabled={importing}
+                onClick={() => setPackageInputRef.current?.click()}
+                className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <FileUp size={14} /> {importing ? 'กำลังนำเข้า…' : 'Import ชุด JSON'}
+              </button>
+              <button
+                type="button"
+                disabled={!activeSet}
+                onClick={() => {
+                  if (!activeSet) return;
+                  exportExamSetPackage(activeSet, questions, sets, categories);
+                }}
+                className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <FileDown size={14} /> Export ชุด JSON
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNewSet((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-xl bg-[#e30613] px-3 py-2 text-xs font-bold text-white"
+              >
+                <Plus size={14} /> เพิ่มชุดใหม่
+              </button>
+            </div>
           </div>
 
           <div className="mt-4">
@@ -2523,6 +2685,9 @@ export default function AdminWorkspace({
                 {importing ? 'กำลังนำเข้า…' : importDragging ? 'วางไฟล์ที่นี่' : 'ลากไฟล์มาวางที่นี่'}
               </p>
               <p className="mt-1 text-xs text-muted">หรือคลิกเพื่อเลือกไฟล์จากเครื่อง</p>
+              <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                JSON คำถามรองรับรูป+วิดีโอ · ถ้าเป็นไฟล์ชุดกิจกรรม (aksorn-exam-set) จะนำเข้าทั้งชุดให้อัตโนมัติ
+              </p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
                 <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-100">
                   JSON
@@ -2579,11 +2744,11 @@ export default function AdminWorkspace({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 id="export-tray-title" className="text-lg font-black text-ink">
-                  ส่งออกคำถาม
+                  ส่งออก
                 </h3>
                 <p className="mt-1 text-sm text-muted">
-                  เลือกรูปแบบไฟล์ — จะส่งออกรายการที่แสดงอยู่ตอนนี้ ({bank.length} ข้อ
-                  {bank.length !== questions.length ? ` จากทั้งหมด ${questions.length}` : ''})
+                  ส่งออกคำถามที่กรองอยู่ ({bank.length} ข้อ
+                  {bank.length !== questions.length ? ` / ${questions.length}` : ''}) หรือทั้งชุดกิจกรรมที่กำลังจัด
                 </p>
               </div>
               <button
@@ -2609,8 +2774,28 @@ export default function AdminWorkspace({
                 <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-100">
                   JSON
                 </span>
-                <p className="text-sm font-bold text-ink">ส่งออกเป็น JSON</p>
-                <p className="text-xs text-muted">เหมาะกับสำรองข้อมูล / นำเข้ากลับ</p>
+                <p className="text-sm font-bold text-ink">ส่งออกคำถามเป็น JSON</p>
+                <p className="text-xs text-muted">รวมรูปภาพ + ลิงก์วิดีโอ · สำรอง/นำเข้ากลับได้</p>
+              </button>
+              <button
+                type="button"
+                disabled={!activeSet}
+                onClick={() => {
+                  if (!activeSet) return;
+                  exportExamSetPackage(activeSet, questions, sets, categories);
+                  setExportTrayOpen(false);
+                }}
+                className="flex flex-col items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-indigo-300 hover:bg-indigo-50/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-indigo-700 ring-1 ring-indigo-100">
+                  ชุด JSON
+                </span>
+                <p className="text-sm font-bold text-ink">ส่งออกทั้งชุดกิจกรรม</p>
+                <p className="text-xs text-muted">
+                  {activeSet
+                    ? `${activeSet.level} · ${activeSet.title} · รวมเมตา+คำถาม+สื่อ`
+                    : 'เลือกชุดก่อน'}
+                </p>
               </button>
               <button
                 type="button"
@@ -2619,7 +2804,7 @@ export default function AdminWorkspace({
                   exportQuestionsExcel(bank);
                   setExportTrayOpen(false);
                 }}
-                className="flex flex-col items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex flex-col items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2"
               >
                 <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-100">
                   Excel

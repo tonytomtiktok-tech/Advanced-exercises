@@ -2,6 +2,8 @@ import * as XLSX from 'xlsx';
 import {
   Question,
   SUBJECT_OPTIONS,
+  getExplanationImages,
+  getPromptImages,
   getQuestionSkills,
   normalizeSkillName,
 } from '@/lib/mock';
@@ -24,16 +26,78 @@ function normalizeContentText(raw: unknown): string {
     .trim();
 }
 
-/** Fingerprint for duplicate check: prompt + options + explanation */
+/** Fingerprint for duplicate check: prompt + options + explanation (+ media shape) */
 export function questionContentKey(
-  q: Pick<Question, 'prompt' | 'options' | 'explanation'> | ImportQuestionDraft,
+  q:
+    | Pick<
+        Question,
+        | 'prompt'
+        | 'options'
+        | 'explanation'
+        | 'promptImages'
+        | 'promptImage'
+        | 'promptVideoUrl'
+        | 'explanationImages'
+        | 'explanationImage'
+        | 'optionImages'
+      >
+    | ImportQuestionDraft,
 ): string {
   const options = Array.isArray(q.options) ? q.options.map(normalizeContentText) : [];
+  const optionImages = Array.isArray(q.optionImages)
+    ? q.optionImages.map((x) => (x ? String(x).slice(0, 64) : ''))
+    : [];
   return JSON.stringify({
     prompt: normalizeContentText(q.prompt),
     options,
     explanation: normalizeContentText(q.explanation),
+    promptVideoUrl: normalizeContentText(q.promptVideoUrl),
+    promptImages: getPromptImages(q).map((x) => x.slice(0, 64)),
+    explanationImages: getExplanationImages(q).map((x) => x.slice(0, 64)),
+    optionImages,
   });
+}
+
+/** Accept array of URLs / data-URLs, or a single string */
+function parseMediaList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x ?? '').trim()).filter(Boolean);
+  }
+  const s = String(raw ?? '').trim();
+  if (!s) return [];
+  // data:/http(s) may contain commas — treat as one value
+  if (/^(data:|https?:\/\/|\/)/i.test(s)) return [s];
+  return s
+    .split(/\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function parseOptionImages(
+  row: Record<string, unknown>,
+  optionCount: number,
+): (string | undefined)[] | undefined {
+  const out: (string | undefined)[] = Array.from({length: optionCount}, () => undefined);
+  let any = false;
+  if (Array.isArray(row.optionImages)) {
+    for (let i = 0; i < optionCount; i++) {
+      const s = String(row.optionImages[i] ?? '').trim();
+      if (s) {
+        out[i] = s;
+        any = true;
+      }
+    }
+  }
+  for (let i = 1; i <= optionCount; i++) {
+    const v =
+      row[`optionImage${i}`] ??
+      row[`รูปตัวเลือก${i}`] ??
+      row[`choiceImage${i}`];
+    if (v == null || String(v).trim() === '') continue;
+    out[i - 1] = String(v).trim();
+    any = true;
+  }
+  return any ? out : undefined;
 }
 
 function normalizeSubject(subject: string) {
@@ -128,17 +192,28 @@ function parseSetIds(raw: unknown): number[] {
 function rowToDraft(row: Record<string, unknown>, index: number): ImportQuestionDraft | {error: string} {
   const prompt = String(row.prompt ?? row.คำถาม ?? row.question ?? row.โจทย์ ?? '').trim();
   const options = parseOptions(row);
-  if (!prompt) return {error: `แถว ${index + 1}: ไม่มีคำถาม`};
-  if (options.length < 2) return {error: `แถว ${index + 1}: ต้องมีตัวเลือกอย่างน้อย 2 ข้อ`};
-
-  const explanation = String(row.explanation ?? row.เฉลย ?? row.คำอธิบาย ?? '').trim();
+  const promptImages = parseMediaList(
+    row.promptImages ?? row.promptImage ?? row.รูปโจทย์ ?? row.images,
+  );
+  const explanationImages = parseMediaList(
+    row.explanationImages ?? row.explanationImage ?? row.รูปเฉลย,
+  );
   const promptVideoUrl = String(
     row.promptVideoUrl ?? row.videoUrl ?? row.วิดีโอ ?? row.video ?? '',
   ).trim();
+  const hasStemMedia = promptImages.length > 0 || !!promptVideoUrl;
+
+  if (!prompt && !hasStemMedia) {
+    return {error: `แถว ${index + 1}: ไม่มีคำถาม (ต้องมีข้อความโจทย์ หรือรูป/วิดีโอ)`};
+  }
+  if (options.length < 2) return {error: `แถว ${index + 1}: ต้องมีตัวเลือกอย่างน้อย 2 ข้อ`};
+
+  const explanation = String(row.explanation ?? row.เฉลย ?? row.คำอธิบาย ?? '').trim();
   const subject = normalizeSubject(String(row.subject ?? row.วิชา ?? 'คณิต'));
   const level = normalizeLevel(String(row.level ?? row.ระดับชั้น ?? row.ระดับ ?? 'ม.1'));
   const skills = parseSkills(row.skills ?? row.skill ?? row.ทักษะ);
   const correct = parseCorrect(row.correct ?? row.คำตอบถูก ?? row.เฉลยข้อ ?? row.answer, options.length);
+  const optionImages = parseOptionImages(row, options.length);
   // Ignore setIds from file — imported questions stay in the bank until assigned manually
   void parseSetIds(row.setIds ?? row.setId ?? row.ชุดกิจกรรม);
 
@@ -149,10 +224,13 @@ function rowToDraft(row: Record<string, unknown>, index: number): ImportQuestion
     skills,
     difficulty: normalizeDifficulty(row.difficulty ?? row.ความยาก),
     prompt,
+    promptImages: promptImages.length ? promptImages : undefined,
     promptVideoUrl: promptVideoUrl || undefined,
     options,
+    optionImages,
     correct,
-    explanation: explanation || '—',
+    explanation: explanation || (explanationImages.length ? '' : '—'),
+    explanationImages: explanationImages.length ? explanationImages : undefined,
   };
 }
 
@@ -162,8 +240,16 @@ function normalizeJsonPayload(parsed: unknown): Record<string, unknown>[] {
     const obj = parsed as Record<string, unknown>;
     if (Array.isArray(obj.questions)) return obj.questions as Record<string, unknown>[];
     if (Array.isArray(obj.data)) return obj.data as Record<string, unknown>[];
-    // single question object
-    if (obj.prompt || obj.คำถาม) return [obj];
+    // single question object (text and/or media stem)
+    if (
+      obj.prompt ||
+      obj.คำถาม ||
+      obj.promptImages ||
+      obj.promptImage ||
+      obj.promptVideoUrl
+    ) {
+      return [obj];
+    }
   }
   return [];
 }
@@ -273,12 +359,18 @@ export function downloadQuestionImportJsonTemplate() {
         skills: ['ความรู้ ความจำ'],
         difficulty: 'ง่าย',
         prompt: 'กำหนดให้ A = {1, 2, 3} ข้อใดถูกต้อง',
+        promptImages: ['https://example.com/prompt.png'],
+        promptVideoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
         options: ['1 ∈ A', '4 ∈ A', '1 ∉ A', 'A เป็นเซตว่าง'],
+        optionImages: [null, null, null, null],
         correct: 0,
         explanation: '1 เป็นสมาชิกของเซต A',
+        explanationImages: ['https://example.com/explain.png'],
         setIds: [],
       },
     ],
+    _note:
+      'promptImages / optionImages / explanationImages รองรับ URL หรือ data URL (base64) จากไฟล์ที่ Export จากระบบนี้ — วิดีโอใช้ promptVideoUrl เป็นลิงก์',
   };
   const blob = new Blob([JSON.stringify(sample, null, 2)], {type: 'application/json'});
   const url = URL.createObjectURL(blob);
@@ -295,22 +387,34 @@ function stamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-/** Export questions as JSON (same shape as import) */
+/** Export questions as JSON (same shape as import) — includes images + video URL */
 export function exportQuestionsJson(questions: Question[], filename?: string) {
   const payload = {
     exportedAt: new Date().toISOString(),
     count: questions.length,
-    questions: questions.map((q) => ({
-      subject: q.subject,
-      level: q.level,
-      skills: getQuestionSkills(q),
-      difficulty: q.difficulty,
-      prompt: q.prompt,
-      options: [...q.options],
-      correct: q.correct,
-      explanation: q.explanation,
-      setIds: Array.isArray(q.setIds) ? [...q.setIds] : [],
-    })),
+    questions: questions.map((q) => {
+      const promptImages = getPromptImages(q);
+      const explanationImages = getExplanationImages(q);
+      const optionImages = Array.isArray(q.optionImages)
+        ? q.options.map((_, i) => q.optionImages?.[i] || null)
+        : q.options.map(() => null);
+      const hasOptionImages = optionImages.some(Boolean);
+      return {
+        subject: q.subject,
+        level: q.level,
+        skills: getQuestionSkills(q),
+        difficulty: q.difficulty,
+        prompt: q.prompt,
+        ...(promptImages.length ? {promptImages} : {}),
+        ...(q.promptVideoUrl ? {promptVideoUrl: q.promptVideoUrl} : {}),
+        options: [...q.options],
+        ...(hasOptionImages ? {optionImages} : {}),
+        correct: q.correct,
+        explanation: q.explanation,
+        ...(explanationImages.length ? {explanationImages} : {}),
+        setIds: Array.isArray(q.setIds) ? [...q.setIds] : [],
+      };
+    }),
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
   const url = URL.createObjectURL(blob);

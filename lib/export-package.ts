@@ -120,6 +120,30 @@ function buildDataJs(
   return `window.AKSORN_DATA = ${JSON.stringify(payload, null, 2)};\n`;
 }
 
+function coverExtFromMimeOrPath(mime: string, src: string): string {
+  const m = mime.toLowerCase();
+  if (m.includes('png')) return 'png';
+  if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+  if (m.includes('webp')) return 'webp';
+  if (m.includes('gif')) return 'gif';
+  if (m.includes('svg')) return 'svg';
+  const fromPath = src.split('?')[0].split('.').pop()?.toLowerCase() || '';
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(fromPath)) {
+    return fromPath === 'jpeg' ? 'jpg' : fromPath;
+  }
+  return 'png';
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 async function loadCoverAsset(
   set: ExamSet,
   categories: SetCategory[] = initialCategories,
@@ -128,15 +152,7 @@ async function loadCoverAsset(
   if (src.startsWith('data:')) {
     const match = src.match(/^data:([^;]+);base64,(.+)$/);
     if (match) {
-      const mime = match[1];
-      const ext =
-        mime.includes('png')
-          ? 'png'
-          : mime.includes('jpeg') || mime.includes('jpg')
-            ? 'jpg'
-            : mime.includes('webp')
-              ? 'webp'
-              : 'img';
+      const ext = coverExtFromMimeOrPath(match[1], src);
       return {path: `assets/cover.${ext}`, content: match[2], encoding: 'base64'};
     }
     return {path: src};
@@ -147,9 +163,19 @@ async function loadCoverAsset(
   try {
     const res = await fetch(src);
     if (res.ok) {
-      const text = await res.text();
-      const name = src.split('/').pop() || 'cover.svg';
-      return {path: `assets/${name}`, content: text, encoding: 'utf8'};
+      const mime = res.headers.get('content-type') || '';
+      const ext = coverExtFromMimeOrPath(mime, src);
+      // SVG is text; raster images must be written as base64 — res.text() corrupts PNG/JPEG
+      if (ext === 'svg' || mime.includes('svg')) {
+        const text = await res.text();
+        return {path: 'assets/cover.svg', content: text, encoding: 'utf8'};
+      }
+      const buffer = await res.arrayBuffer();
+      return {
+        path: `assets/cover.${ext}`,
+        content: arrayBufferToBase64(buffer),
+        encoding: 'base64',
+      };
     }
   } catch {
     /* fall through */
