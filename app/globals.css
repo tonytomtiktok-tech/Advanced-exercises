@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700;800;900&display=swap');
+@tailwind base;@tailwind components;@tailwind utilities;
+:root{color-scheme:light}body{font-family:'Prompt',system-ui,sans-serif;color:#17233c;background-color:#fbfcff;background-image:radial-gradient(#e3e9f3 0.65px,transparent 0.65px);background-size:9px 9px}button{cursor:pointer}button:disabled{cursor:not-allowed}.hero{background:radial-gradient(circle at 0% 0%,#fff3cf 0%,transparent 42%),radial-gradient(circle at 100% 90%,#eceaff 0%,transparent 50%),white}.field{width:100%;min-width:0;border:1px solid #e5eaf3;border-radius:12px;background:white;padding:12px 14px;font-size:14px;outline:none;transition:border .15s}.field:focus{border-color:#7674ed;box-shadow:0 0 0 3px #e9e8ff}
+
+/* Activity hero — fluid scale to fit each device viewport */
+.activity-stage{position:relative;display:flex;width:100%;flex:1;min-height:calc(100dvh - 5rem);overflow:hidden;background:#fff}
+.activity-stage-cover{position:absolute;inset:0}
+.activity-stage-cover img{height:100%;width:100%;object-fit:cover}
+.activity-stage-body{position:relative;z-index:10;display:flex;width:100%;flex:1;min-height:calc(100dvh - 5rem);flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:clamp(1.25rem,4vh,3rem) clamp(1rem,4vw,3rem) clamp(5.5rem,12vh,6.5rem);gap:clamp(1rem,2.8vh,2.25rem)}
+@media(min-width:1024px){.activity-stage-body{padding-bottom:clamp(2rem,6vh,3.5rem)}}
+.activity-stage-badge{display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;background:#fff;border:1px solid #ffedd5;color:#ea580c;font-weight:900;font-size:clamp(.8125rem,calc(1.1vw + .65rem),1.125rem);padding:clamp(.5rem,1.2vh,.75rem) clamp(1rem,2.5vw,1.5rem)}
+.activity-stage-title{margin:0;font-weight:900;letter-spacing:-.025em;color:#17233c;line-height:1.1;font-size:clamp(2.25rem,calc(4.5vw + 1.25rem),4.75rem);max-width:min(92vw,18ch)}
+.activity-stage-meter{display:flex;width:100%;max-width:min(92vw,40rem);align-items:stretch;overflow:hidden;border-radius:1.25rem;border:1px solid #e2e8f0;background:rgba(255,255,255,.95);backdrop-filter:blur(8px)}
+.activity-stage-meter .meter-cell{flex:1;min-width:0;padding:1.15rem 1.35rem;text-align:center}
+@media(min-width:640px){.activity-stage-meter .meter-cell{padding:1.25rem 2rem}}
+.activity-stage-meter .meter-divider{width:1px;align-self:stretch;background:rgba(226,232,240,.9)}
+.activity-stage-meter .meter-label{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#94a3b8;line-height:1.2}
+.activity-stage-meter .meter-value{margin-top:.3rem;font-size:2.25rem;font-weight:900;line-height:1;color:#17233c;font-variant-numeric:tabular-nums}
+.activity-stage-meter .meter-red{color:#e30613}
+.activity-stage-meter .meter-unit{margin-left:.3rem;font-size:1rem;font-weight:700;color:#94a3b8}
+.activity-stage-cta{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:9999px;background:#e30613;color:#fff;font-weight:700;border:0;font-size:clamp(1rem,calc(1.2vw + .75rem),1.25rem);padding:clamp(.85rem,1.8vh,1.15rem) clamp(2.25rem,5vw,3.5rem);box-shadow:0 14px 36px rgba(227,6,19,.4);transition:transform .15s,background .15s}
+.activity-stage-cta:hover{background:#c40510;transform:translateY(-2px)}
