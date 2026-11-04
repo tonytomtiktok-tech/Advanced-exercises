@@ -1,5 +1,5 @@
 'use client';
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import {Check, ChevronDown, ChevronUp, Download, FileDown, FileUp, GripVertical, Pencil, Plus, Trash2, Upload, X} from 'lucide-react';
 import {
   DEFAULT_CATEGORY_ID,
@@ -137,9 +137,13 @@ export default function AdminWorkspace({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [exportSetId, setExportSetId] = useState(1);
   const [exporting, setExporting] = useState(false);
-  const [dragId, setDragId] = useState<number | null>(null);
-  const [overSetId, setOverSetId] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [selectedBankIds, setSelectedBankIds] = useState<number[]>([]);
+  const [assignConfirm, setAssignConfirm] = useState<{
+    setId: number;
+    setTitle: string;
+    ids: number[];
+  } | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [activeSetId, setActiveSetId] = useState<number>(sets[0]?.id ?? 1);
   const [pendingAdd, setPendingAdd] = useState<number[]>([]);
@@ -544,22 +548,90 @@ export default function AdminWorkspace({
     });
   }
 
-  function stageAddToActive(questionId: number) {
-    if (!activeSet) return;
-    const q = questions.find((item) => item.id === questionId);
-    if (!q) return;
-    // No level lock — ม.2 can be placed in a ม.6 set (and vice versa)
-    const alreadyCommitted =
-      getQuestionSetIds(q, sets).includes(activeSet.id) ||
-      (activeSet.questionIds || []).includes(questionId);
-    if (alreadyCommitted) {
-      setPendingRemove((prev) => prev.filter((id) => id !== questionId));
-      setDraftOrder((prev) => (prev.includes(questionId) ? prev : [...prev, questionId]));
+  function toggleBankSelect(questionId: number) {
+    setSelectedBankIds((prev) =>
+      prev.includes(questionId) ? prev.filter((id) => id !== questionId) : [...prev, questionId],
+    );
+  }
+
+  function toggleSelectAllBank() {
+    const visibleIds = bank.map((q) => q.id);
+    const allSelected =
+      visibleIds.length > 0 && visibleIds.every((id) => selectedBankIds.includes(id));
+    if (allSelected) {
+      setSelectedBankIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
       return;
     }
-    setPendingRemove((prev) => prev.filter((id) => id !== questionId));
-    setPendingAdd((prev) => (prev.includes(questionId) ? prev : [...prev, questionId]));
-    setDraftOrder((prev) => (prev.includes(questionId) ? prev : [...prev, questionId]));
+    setSelectedBankIds((prev) => [...new Set([...prev, ...visibleIds])]);
+  }
+
+  function requestAssignSelected() {
+    if (!activeSet || selectedBankIds.length === 0) return;
+    setAssignConfirm({
+      setId: activeSet.id,
+      setTitle: `${activeSet.level} · ${activeSet.title}`,
+      ids: [...selectedBankIds],
+    });
+  }
+
+  function confirmAssignSelected() {
+    if (!assignConfirm) return;
+    const {ids, setId} = assignConfirm;
+    const target = sets.find((s) => s.id === setId);
+    if (!target) {
+      setAssignConfirm(null);
+      return;
+    }
+
+    const baseOrder =
+      activeSetId === setId ? effectiveOrder : getSetMemberIds(target, questions, sets);
+    const finalOrder = [...baseOrder];
+    for (const questionId of ids) {
+      if (questions.some((q) => q.id === questionId) && !finalOrder.includes(questionId)) {
+        finalOrder.push(questionId);
+      }
+    }
+    const finalSet = new Set(finalOrder);
+    const meta =
+      activeSetId === setId ? safeDraftMeta : draftMetaFromSet(target, categories);
+    const category = getSetCategory({categoryId: meta.categoryId}, categories);
+
+    setQuestions((prev) =>
+      prev.map((q) => {
+        const qIds = new Set(getQuestionSetIds(q, sets));
+        if (finalSet.has(q.id)) qIds.add(setId);
+        else qIds.delete(setId);
+        return {...q, setIds: [...qIds], topic: undefined};
+      }),
+    );
+    setSets((prev) =>
+      prev.map((s) =>
+        s.id === setId
+          ? {
+              ...s,
+              time: meta.time,
+              cover: meta.cover || category.defaultCover,
+              categoryId: meta.categoryId,
+              coverCustom: meta.coverCustom,
+              count: finalOrder.length,
+              questionIds: finalOrder,
+            }
+          : s,
+      ),
+    );
+
+    metaTouchedRef.current = false;
+    setActiveSetId(setId);
+    setExportSetId(setId);
+    setPendingAdd([]);
+    setPendingRemove([]);
+    setDraftMeta(meta);
+    setDraftOrder(finalOrder);
+    setAssignConfirm(null);
+    setSelectedBankIds([]);
+    setDirty(true);
+    setAssignFlash(true);
+    window.setTimeout(() => setAssignFlash(false), 2200);
   }
 
   function stageRemoveFromActive(questionId: number) {
@@ -1044,7 +1116,7 @@ export default function AdminWorkspace({
           <Pill tone="purple">Admin workspace · Demo</Pill>
           <h1 className="mt-3 text-3xl font-black text-ink">จัดการคลังข้อสอบ</h1>
           <p className="mt-2 text-sm text-muted">
-            สร้างคำถามทางซ้าย แล้วลากไปใส่ชุดกิจกรรมทางขวา — กดบันทึกเพื่ออัปเดตหน้าคลังข้อสอบ
+            สร้างข้อสอบด้านบน · จัดชุดตรงกลาง · ติ๊กเลือกคำถามจากตารางด้านล่างแล้วกดยืนยัน
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1119,10 +1191,10 @@ export default function AdminWorkspace({
             </h2>
             {editingId !== null ? (
               <p className="mt-1 text-xs text-orange-600">
-                กำลังแก้ไขข้อ #{editingId} — จัดชุดด้วยการลากไปทางขวา
+                กำลังแก้ไขข้อ #{editingId} — บันทึกแล้วจัดเข้าชุดได้จากตารางด้านล่าง
               </p>
             ) : (
-              <p className="mt-1 text-xs text-muted">กรอกโจทย์ด้านซ้าย · ตั้งตัวเลือกด้านขวา</p>
+              <p className="mt-1 text-xs text-muted">กรอกโจทย์ด้านซ้าย · ตั้งตัวเลือกด้านขวา · บันทึกแล้วไปจัดชุดด้านล่าง</p>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1354,241 +1426,12 @@ export default function AdminWorkspace({
         </div>
       </section>
 
-      {/* Bottom: bank left / sets right */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-3xl border bg-white p-5 shadow-soft sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-black">
-                รายการคำถาม{' '}
-                <span className="text-muted">
-                  ({bank.length}
-                  {bank.length !== questions.length ? ` / ${questions.length}` : ''})
-                </span>
-              </h2>
-              <p className="mt-1 text-xs text-muted">ลากการ์ดไปวางที่ชุดกิจกรรมด้านขวา</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setImportTrayOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#e30613] px-3.5 py-2 text-xs font-bold text-white transition hover:bg-[#c40510]"
-              >
-                <FileUp size={14} />
-                นำเข้า
-              </button>
-              <button
-                type="button"
-                onClick={() => setExportTrayOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FileDown size={14} />
-                ส่งออก
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs font-bold text-muted">
-              วิชา
-              <select
-                value={filterSubject}
-                onChange={(e) => setFilterSubject(e.target.value)}
-                className="field mt-1.5"
-              >
-                <option>ทั้งหมด</option>
-                {SUBJECT_OPTIONS.map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs font-bold text-muted">
-              ระดับชั้น
-              <select
-                value={filterLevel}
-                onChange={(e) => setFilterLevel(e.target.value)}
-                className="field mt-1.5"
-              >
-                <option>ทั้งหมด</option>
-                {levels.map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="mt-5 max-h-[720px] space-y-3 overflow-y-auto pr-1">
-            {bank.length === 0 && (
-              <p className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-slate-400">
-                ไม่พบคำถามตามตัวกรองที่เลือก
-              </p>
-            )}
-            {bank.map((q, i) => {
-              const inSets = getQuestionSetIds(q, sets)
-                .map((id) => sets.find((s) => s.id === id)?.title)
-                .filter(Boolean);
-              const expanded = expandedIds.includes(q.id);
-              return (
-                <div
-                  key={q.id}
-                  draggable
-                  onDragStart={(e) => {
-                    setDragId(q.id);
-                    e.dataTransfer.setData('text/plain', String(q.id));
-                    e.dataTransfer.effectAllowed = 'copy';
-                  }}
-                  onDragEnd={() => {
-                    setDragId(null);
-                    setOverSetId(null);
-                  }}
-                  className={cls(
-                    'cursor-grab rounded-2xl border bg-white p-4 active:cursor-grabbing',
-                    dragId === q.id && 'border-brand bg-indigo-50/50 opacity-80',
-                    editingId === q.id && 'border-brand bg-indigo-50/40',
-                  )}
-                >
-                  <div className="flex items-start gap-2">
-                    <GripVertical className="mt-1 shrink-0 text-slate-300" size={18} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap gap-1">
-                        <Pill tone="orange">{normalizeSubject(q.subject)}</Pill>
-                        <Pill tone="purple">{q.level}</Pill>
-                        {inSets.map((title) => (
-                          <Pill key={String(title)}>{title}</Pill>
-                        ))}
-                        {!inSets.length && <Pill tone="orange">ยังไม่เข้าชุด</Pill>}
-                        {getQuestionSkills(q).map((s) => (
-                          <Pill key={s} tone="green">
-                            {s}
-                          </Pill>
-                        ))}
-                        {!getQuestionSkills(q).length && (
-                          <Pill tone="orange">ยังไม่ระบุทักษะ Bloom</Pill>
-                        )}
-                      </div>
-                      <div className="mt-3 text-sm font-semibold leading-6">
-                        {i + 1}.{' '}
-                        <MathText
-                          text={
-                            q.prompt ||
-                            (getPromptImages(q).length ? '(โจทย์เป็นรูปภาพ)' : '')
-                          }
-                        />
-                      </div>
-                      {!expanded && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <p className="text-xs text-emerald-600">
-                            ✓ {q.options[q.correct] || (q.optionImages?.[q.correct] ? '(รูป)' : '')}
-                          </p>
-                          {getPromptImages(q).length > 0 && (
-                            <span className="text-[11px] font-bold text-slate-400">
-                              · มีรูปโจทย์ {getPromptImages(q).length} ภาพ
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {expanded && (
-                        <div className="mt-3 space-y-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-                          <p className="text-[11px] font-bold uppercase tracking-wide text-muted">
-                            ตัวอย่างข้อคำถาม
-                          </p>
-                          <PromptImage images={getPromptImages(q)} compact />
-                          <PromptVideo url={q.promptVideoUrl} compact />
-                          <div className="space-y-2">
-                            {q.options.map((opt, oi) => {
-                              const isCorrect = oi === q.correct;
-                              return (
-                                <div
-                                  key={oi}
-                                  className={cls(
-                                    'rounded-lg border px-3 py-2 text-xs font-semibold',
-                                    isCorrect
-                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                      : 'border-slate-200 bg-white text-slate-600',
-                                  )}
-                                >
-                                  <div className="flex items-start gap-2">
-                                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-black text-slate-500 ring-1 ring-slate-200">
-                                      {String.fromCharCode(65 + oi)}
-                                    </span>
-                                    <span className="min-w-0 flex-1 leading-5">
-                                      <MathText
-                                        text={opt || (q.optionImages?.[oi] ? '(รูปภาพ)' : '')}
-                                      />
-                                    </span>
-                                    {isCorrect && (
-                                      <span className="shrink-0 text-[10px] font-bold text-emerald-700">
-                                        ✓ ข้อถูก
-                                      </span>
-                                    )}
-                                  </div>
-                                  <OptionImage src={q.optionImages?.[oi]} compact />
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <div className="rounded-lg border border-indigo-100 bg-white px-3 py-2.5">
-                            <p className="text-[11px] font-bold text-brand">คำอธิบายเฉลย</p>
-                            <MathText
-                              as="div"
-                              className="mt-1 text-xs leading-5 text-slate-600"
-                              text={
-                                q.explanation ||
-                                (getExplanationImages(q).length ? '(เฉลยเป็นรูปภาพ)' : '')
-                              }
-                            />
-                            <ExplanationImage images={getExplanationImages(q)} compact />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setExpandedIds((prev) =>
-                            prev.includes(q.id) ? prev.filter((id) => id !== q.id) : [...prev, q.id],
-                          );
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-ink"
-                        aria-label={expanded ? 'ย่อรายละเอียด' : 'ขยายรายละเอียด'}
-                        title={expanded ? 'ย่อ' : 'ขยาย'}
-                      >
-                        {expanded ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => startEdit(q)}
-                        className="rounded-lg p-2 text-slate-400 hover:bg-indigo-50 hover:text-brand"
-                        aria-label="แก้ไขคำถาม"
-                      >
-                        <Pencil size={17} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          askDeleteQuestion(q);
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
-                        aria-label="ลบคำถาม"
-                      >
-                        <Trash2 size={17} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border bg-white p-5 shadow-soft sm:p-6">
+      {/* Middle: organize sets */}
+      <section className="mb-6 rounded-3xl border bg-white p-5 shadow-soft sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-lg font-black">จัดชุดกิจกรรม</h2>
-              <p className="mt-1 text-xs text-muted">เลือกชุดจากรายการ → ลากคำถามเข้า → กดบันทึกเพื่อยืนยัน</p>
+              <p className="mt-1 text-xs text-muted">เลือกชุด · ติ๊กคำถามจากตารางด้านล่าง · กดยืนยันเพื่อเพิ่มเข้าชุด</p>
             </div>
             <button
               type="button"
@@ -1854,32 +1697,7 @@ export default function AdminWorkspace({
 
           {/* Active set workspace */}
           {activeSet && (
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOverSetId(activeSet.id);
-              }}
-              onDragLeave={() => setOverSetId((id) => (id === activeSet.id ? null : id))}
-              onDrop={(e) => {
-                e.preventDefault();
-                const raw = e.dataTransfer.getData('text/plain') || '';
-                if (raw.startsWith('reorder:')) {
-                  setOverSetId(null);
-                  setOrderDragId(null);
-                  return;
-                }
-                const id = Number(raw || dragId);
-                if (id) stageAddToActive(id);
-                setOverSetId(null);
-                setDragId(null);
-              }}
-              className={cls(
-                'mt-4 overflow-hidden rounded-2xl border-2 border-dashed transition',
-                overSetId === activeSet.id
-                  ? 'border-brand bg-indigo-50/70'
-                  : 'border-slate-200 bg-white',
-              )}
-            >
+            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
               {/* Header: cover + title */}
               <div className="flex gap-4 border-b border-slate-100 p-4">
                 <div className="shrink-0 space-y-2">
@@ -2023,7 +1841,7 @@ export default function AdminWorkspace({
                 <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
                   {draftInActive.length === 0 && (
                     <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-8 text-center text-xs text-slate-400">
-                      ยังไม่มีคำถามในชุดนี้ — ลากมาจากรายการซ้าย
+                      ยังไม่มีคำถามในชุดนี้ — ติ๊กเลือกจากตารางด้านล่างแล้วกดยืนยัน
                     </p>
                   )}
                   {draftInActive.map((q, index) => {
@@ -2052,12 +1870,8 @@ export default function AdminWorkspace({
                           if (fromReorder) {
                             const fromIndex = draftOrder.indexOf(fromReorder);
                             moveDraftQuestion(fromIndex, index);
-                          } else {
-                            const bankId = Number(raw || dragId);
-                            if (bankId) stageAddToActive(bankId);
                           }
                           setOrderDragId(null);
-                          setDragId(null);
                         }}
                         className={cls(
                           'flex items-start gap-2 rounded-xl border px-2 py-2',
@@ -2119,7 +1933,398 @@ export default function AdminWorkspace({
             </div>
           )}
         </section>
-      </div>
+
+      {/* Bottom: question bank table */}
+      <section className="mb-6 rounded-3xl border bg-white p-5 shadow-soft sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black">
+                รายการคำถาม{' '}
+                <span className="text-muted">
+                  ({bank.length}
+                  {bank.length !== questions.length ? ` / ${questions.length}` : ''})
+                </span>
+              </h2>
+              <p className="mt-1 text-xs text-muted">
+                ติ๊กเลือกคำถาม · เลือกชุดกิจกรรม · กดยืนยันเพื่อเพิ่มเข้าชุด
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setImportTrayOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#e30613] px-3.5 py-2 text-xs font-bold text-white transition hover:bg-[#c40510]"
+              >
+                <FileUp size={14} />
+                นำเข้า
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportTrayOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+              >
+                <FileDown size={14} />
+                ส่งออก
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="text-xs font-bold text-muted">
+              จัดชุดกิจกรรม
+              <select
+                value={activeSet?.id || ''}
+                onChange={(e) => selectSet(Number(e.target.value))}
+                className="field mt-1.5"
+              >
+                {sets.length === 0 && <option value="">ยังไม่มีชุด</option>}
+                {sets.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.level} · {s.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-muted">
+              วิชา
+              <select
+                value={filterSubject}
+                onChange={(e) => setFilterSubject(e.target.value)}
+                className="field mt-1.5"
+              >
+                <option>ทั้งหมด</option>
+                {SUBJECT_OPTIONS.map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-muted">
+              ระดับชั้น
+              <select
+                value={filterLevel}
+                onChange={(e) => setFilterLevel(e.target.value)}
+                className="field mt-1.5"
+              >
+                <option>ทั้งหมด</option>
+                {levels.map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {selectedBankIds.length > 0 && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+              <p className="text-sm font-bold text-emerald-800">
+                เลือกแล้ว {selectedBankIds.length} ข้อ
+                {activeSet ? (
+                  <span className="font-semibold text-emerald-700">
+                    {' '}
+                    → จะเพิ่มเข้าชุด {activeSet.level} · {activeSet.title}
+                  </span>
+                ) : null}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBankIds([])}
+                  className="rounded-xl border border-emerald-200 bg-white px-4 py-2 text-xs font-bold text-slate-600"
+                >
+                  ล้างการเลือก
+                </button>
+                <button
+                  type="button"
+                  disabled={!activeSet}
+                  onClick={requestAssignSelected}
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  ยืนยัน
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+            <div className="max-h-[560px] overflow-auto">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-100 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={
+                          bank.length > 0 && bank.every((q) => selectedBankIds.includes(q.id))
+                        }
+                        onChange={toggleSelectAllBank}
+                        className="accent-emerald-600"
+                        aria-label="เลือกทั้งหมดในตาราง"
+                        title="เลือกทั้งหมด"
+                      />
+                    </th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">#</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">ID</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">วิชา</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">ระดับ</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 min-w-[280px]">โจทย์</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">คำตอบถูก</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 min-w-[140px]">ทักษะ</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 min-w-[120px]">ชุด</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap">ความยาก</th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 whitespace-nowrap text-right">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bank.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">
+                        ไม่พบคำถามตามตัวกรองที่เลือก
+                      </td>
+                    </tr>
+                  )}
+                  {bank.map((q, i) => {
+                    const inSets = getQuestionSetIds(q, sets)
+                      .map((id) => sets.find((s) => s.id === id)?.title)
+                      .filter(Boolean);
+                    const skills = getQuestionSkills(q);
+                    const expanded = expandedIds.includes(q.id);
+                    const selected = selectedBankIds.includes(q.id);
+                    const correctLabel =
+                      q.options[q.correct] ||
+                      (q.optionImages?.[q.correct] ? '(รูป)' : '—');
+                    return (
+                      <Fragment key={q.id}>
+                        <tr
+                          className={cls(
+                            'border-b border-slate-100 bg-white hover:bg-indigo-50/40',
+                            selected && 'bg-emerald-50/70',
+                            editingId === q.id && 'bg-indigo-50/70',
+                          )}
+                        >
+                          <td className="px-3 py-2.5 align-top">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleBankSelect(q.id)}
+                              className="accent-emerald-600"
+                              aria-label={`เลือกคำถาม ${q.id}`}
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 align-top text-xs font-bold text-slate-400">
+                            {i + 1}
+                          </td>
+                          <td className="px-3 py-2.5 align-top font-mono text-xs text-slate-500">{q.id}</td>
+                          <td className="px-3 py-2.5 align-top whitespace-nowrap text-xs font-semibold">
+                            {normalizeSubject(q.subject)}
+                          </td>
+                          <td className="px-3 py-2.5 align-top whitespace-nowrap text-xs font-semibold">{q.level}</td>
+                          <td className="px-3 py-2.5 align-top">
+                            <div className="max-w-md text-xs font-semibold leading-5 text-ink line-clamp-2">
+                              <MathText
+                                text={
+                                  q.prompt ||
+                                  (getPromptImages(q).length ? '(โจทย์เป็นรูปภาพ)' : '')
+                                }
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 align-top">
+                            <span className="line-clamp-2 text-xs font-semibold text-emerald-700">
+                              {String.fromCharCode(65 + q.correct)}. {correctLabel}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 align-top">
+                            <div className="flex flex-wrap gap-1">
+                              {skills.length ? (
+                                skills.map((sk) => (
+                                  <span
+                                    key={sk}
+                                    className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"
+                                  >
+                                    {sk}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[10px] font-bold text-orange-500">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 align-top">
+                            <div className="flex flex-wrap gap-1">
+                              {inSets.length ? (
+                                inSets.map((title) => (
+                                  <span
+                                    key={String(title)}
+                                    className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600"
+                                  >
+                                    {title}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[10px] font-bold text-orange-500">ยังไม่เข้าชุด</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 align-top whitespace-nowrap text-xs text-slate-600">
+                            {q.difficulty}
+                          </td>
+                          <td className="px-3 py-2.5 align-top">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedIds((prev) =>
+                                    prev.includes(q.id)
+                                      ? prev.filter((id) => id !== q.id)
+                                      : [...prev, q.id],
+                                  );
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-ink"
+                                aria-label={expanded ? 'ย่อรายละเอียด' : 'ขยายรายละเอียด'}
+                                title={expanded ? 'ย่อ' : 'ขยาย'}
+                              >
+                                {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => startEdit(q)}
+                                className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-brand"
+                                aria-label="แก้ไขคำถาม"
+                              >
+                                <Pencil size={16} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askDeleteQuestion(q);
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                                aria-label="ลบคำถาม"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr className="border-b border-slate-100 bg-slate-50/80">
+                            <td colSpan={11} className="px-4 py-3">
+                              <div className="grid gap-3 lg:grid-cols-2">
+                                <div className="space-y-2">
+                                  <p className="text-[11px] font-bold uppercase tracking-wide text-muted">
+                                    ตัวเลือก
+                                  </p>
+                                  <PromptImage images={getPromptImages(q)} compact />
+                                  <PromptVideo url={q.promptVideoUrl} compact />
+                                  {q.options.map((opt, oi) => {
+                                    const isCorrect = oi === q.correct;
+                                    return (
+                                      <div
+                                        key={oi}
+                                        className={cls(
+                                          'rounded-lg border px-3 py-2 text-xs font-semibold',
+                                          isCorrect
+                                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                            : 'border-slate-200 bg-white text-slate-600',
+                                        )}
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-black text-slate-500 ring-1 ring-slate-200">
+                                            {String.fromCharCode(65 + oi)}
+                                          </span>
+                                          <span className="min-w-0 flex-1 leading-5">
+                                            <MathText
+                                              text={opt || (q.optionImages?.[oi] ? '(รูปภาพ)' : '')}
+                                            />
+                                          </span>
+                                          {isCorrect && (
+                                            <span className="shrink-0 text-[10px] font-bold text-emerald-700">
+                                              ✓ ข้อถูก
+                                            </span>
+                                          )}
+                                        </div>
+                                        <OptionImage src={q.optionImages?.[oi]} compact />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="rounded-lg border border-indigo-100 bg-white px-3 py-2.5">
+                                  <p className="text-[11px] font-bold text-brand">คำอธิบายเฉลย</p>
+                                  <MathText
+                                    as="div"
+                                    className="mt-1 text-xs leading-5 text-slate-600"
+                                    text={
+                                      q.explanation ||
+                                      (getExplanationImages(q).length ? '(เฉลยเป็นรูปภาพ)' : '')
+                                    }
+                                  />
+                                  <ExplanationImage images={getExplanationImages(q)} compact />
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+      {assignConfirm && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assign-confirm-title"
+          onClick={() => setAssignConfirm(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border bg-white p-6 shadow-soft"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+                <Check size={20} />
+              </div>
+              <div className="min-w-0">
+                <h3 id="assign-confirm-title" className="text-lg font-black text-ink">
+                  ยืนยันการเพิ่มคำถามเข้าชุด
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  คุณเลือกคำถามทั้งหมด{' '}
+                  <span className="font-black text-emerald-700">{assignConfirm.ids.length} ข้อ</span>{' '}
+                  เพื่อเพิ่มเข้าชุด{' '}
+                  <span className="font-black text-ink">“{assignConfirm.setTitle}”</span>
+                </p>
+                <p className="mt-2 text-xs font-bold text-slate-500">
+                  กดยืนยันอีกครั้งเพื่อบันทึกลงชุดกิจกรรมนี้
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAssignConfirm(null)}
+                className="rounded-xl border px-4 py-2.5 text-sm font-bold text-slate-600"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmAssignSelected}
+                className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
+              >
+                ยืนยัน ({assignConfirm.ids.length} ข้อ)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {dangerConfirm && (
         <div
