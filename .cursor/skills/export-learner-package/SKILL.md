@@ -1,27 +1,28 @@
 ---
 name: export-learner-package
 description: >-
-  Mandatory standard for every learner exam-set export under public/aksorn-*.
-  Covers package layout, binary cover handling, minify/performance, safety checks,
-  and post-export verification. Use whenever exporting a user package, preparing
-  a build for server upload, hardening aksorn-* folders, or when the user mentions
-  Export แพ็กเกจผู้ใช้, export package, minify export, or ขึ้น server.
+  Mandatory standard for every learner exam-set export downloaded as ZIP to the
+  user's machine (aksorn-*-vNN.zip). Covers package layout, binary cover handling,
+  minify/performance, safety checks, and post-export verification. Use whenever
+  exporting a user package, preparing a build for server upload, hardening an
+  extracted aksorn-* folder, or when the user mentions Export แพ็กเกจผู้ใช้,
+  export package, minify export, or ขึ้น server.
 ---
 
 # Export learner package (mandatory)
 
-Apply this skill **every time** a learner package is exported or an `public/aksorn-*`
-folder is prepared for upload. Same checklist for every version — no shortcuts.
+Apply this skill **every time** a learner package is exported. Same checklist for
+every version — no shortcuts.
 
 This is **not** the Next.js admin app. Do not minify `components/`, `lib/` source used
-for development. Harden only the **exported static package** (or the export pipeline
-that writes it).
+for development. Harden only the **exported static package** (ZIP contents or an
+extracted folder prepared for upload).
 
 ## Pipeline entry points
 
-- UI: Admin → Export แพ็กเกจผู้ใช้
-- Code: `lib/export-package.ts` → `POST /api/export-package`
-- Output: `public/<base>-vNN/` (immutable version folders; never overwrite older ones)
+- UI: Admin → Export แพ็กเกจผู้ใช้ → **download ZIP to the user's machine**
+- Code: `lib/export-package.ts` (JSZip client-side; no write to `public/`)
+- Output: `<base>-vNN.zip` containing folder `<base>-vNN/` (version from localStorage)
 
 ## Required package layout
 
@@ -67,22 +68,22 @@ Prefer project tooling (`minify_project` MCP **on the export folder only**, or a
 
 If minify is not wired into Export yet, either:
 - implement minify in the export pipeline, or
-- minify the new `public/aksorn-*-vNN/` folder immediately after export,
+- extract the ZIP and minify that folder before server upload,
 
 then re-verify the checklist below.
 
 ## Post-export verification (block shipping if any fail)
 
-1. Folder exists under `public/` with expected `vNN`.
+1. ZIP downloaded; extract contains expected `vNN` folder layout.
 2. `assets/data.js` parses; `questions.length >= 1`.
 3. Cover file exists and opens as a real image (not corrupt UTF-8 garbage). File size should be close to the source asset.
 4. Open `index.html` (activity), `exam.html`, `report.html` — no missing asset 404 for `app.js` / `styles.css` / `data.js` / cover / logo.
-5. No admin-only strings or export API URLs required at runtime for learners.
-6. Report briefly: folder path, version label, question count, cover path, minify done yes/no.
+5. No admin-only strings or server write API required at runtime for learners.
+6. Report briefly: zip/folder name, version label, question count, cover path, minify done yes/no.
 
 ## When changing export code
 
-Any change to `lib/export-package.ts`, `lib/export-app-js.ts`, `lib/export-styles.ts`, or `app/api/export-package` must preserve this standard. After code changes, export a smoke package and run the verification list.
+Any change to `lib/export-package.ts`, `lib/export-app-js.ts`, or `lib/export-styles.ts` must preserve this standard. After code changes, export a smoke ZIP and run the verification list.
 
 ## Anti-patterns
 

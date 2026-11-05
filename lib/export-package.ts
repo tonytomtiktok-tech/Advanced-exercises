@@ -4,9 +4,10 @@ import {exportStyles} from '@/lib/export-styles';
 import {buildExportAppJs} from '@/lib/export-app-js';
 
 export type ExportResult = {
+  /** Folder name inside the zip, e.g. aksorn-statistics-v01 */
   folder: string;
-  path: string;
-  url: string;
+  /** Downloaded zip filename */
+  filename: string;
   version: number;
   versionLabel: string;
 };
@@ -193,6 +194,21 @@ async function loadLogoSvg(): Promise<string> {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 86.73 86.74"><circle cx="43" cy="43" r="40" fill="#e30613"/></svg>`;
 }
 
+function nextLocalVersion(base: string): number {
+  if (typeof window === 'undefined') return 1;
+  const key = `kh-export-ver-${base}`;
+  const prev = Number(window.localStorage.getItem(key) || '0');
+  const next = Number.isFinite(prev) && prev > 0 ? prev + 1 : 1;
+  window.localStorage.setItem(key, String(next));
+  return next;
+}
+
+function formatVersion(n: number): {folderTag: string; label: string} {
+  const pad = String(n).padStart(2, '0');
+  return {folderTag: `v${pad}`, label: `v.${pad}`};
+}
+
+/** Build learner package and download as ZIP to the user's machine */
 export async function exportUserPackage(
   set: ExamSet,
   questions: Question[],
@@ -203,6 +219,11 @@ export async function exportUserPackage(
   }
 
   const base = exportBaseSlug(set);
+  const version = nextLocalVersion(base);
+  const {folderTag, label} = formatVersion(version);
+  const folder = `${base}-${folderTag}`;
+  const filename = `${folder}.zip`;
+
   const logo = await loadLogoSvg();
   const cover = await loadCoverAsset(set, categories);
   const coverPathForData = cover.path;
@@ -230,39 +251,36 @@ export async function exportUserPackage(
     });
   }
 
-  const res = await fetch('/api/export-package', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({base, files}),
-  });
-  const data = (await res.json().catch(() => null)) as
-    | {
-        ok?: boolean;
-        folder?: string;
-        path?: string;
-        url?: string;
-        version?: number;
-        versionLabel?: string;
-        error?: string;
-      }
-    | null;
-  if (
-    !res.ok ||
-    !data?.ok ||
-    !data.folder ||
-    !data.path ||
-    !data.url ||
-    typeof data.version !== 'number' ||
-    !data.versionLabel
-  ) {
-    throw new Error(data?.error || 'Export ไม่สำเร็จ');
+  // Dynamic import keeps JSZip (and core-js) out of the initial SSR bundle
+  const {default: JSZip} = await import('jszip');
+  const zip = new JSZip();
+  const root = zip.folder(folder);
+  if (!root) throw new Error('สร้าง ZIP ไม่สำเร็จ');
+
+  for (const file of files) {
+    if (file.encoding === 'base64') {
+      root.file(file.path, file.content, {base64: true});
+    } else {
+      root.file(file.path, file.content);
+    }
   }
 
+  const blob = await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: {level: 6},
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
+
   return {
-    folder: data.folder,
-    path: data.path,
-    url: data.url,
-    version: data.version,
-    versionLabel: data.versionLabel,
+    folder,
+    filename,
+    version,
+    versionLabel: label,
   };
 }

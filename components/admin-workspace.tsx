@@ -1226,10 +1226,9 @@ export default function AdminWorkspace({
     setExporting(true);
     try {
       const result = await exportUserPackage(target, qs, categories);
-      const open = window.confirm(
-        `Export แล้ว ${result.versionLabel}\n${result.path}\n\nเวอร์ชันเก่าจะไม่ถูกลบ\nเปิดพรีวิว ${result.url} เลยไหม?`,
+      alert(
+        `ดาวน์โหลดแล้ว ${result.versionLabel}\nไฟล์: ${result.filename}\n\nแตก ZIP แล้วเปิด index.html ด้วยเบราว์เซอร์ หรืออัปโฟลเดอร์ขึ้น server ได้`,
       );
-      if (open) window.open(result.url, '_blank');
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : 'Export ไม่สำเร็จ กรุณาลองใหม่');
@@ -1272,7 +1271,7 @@ export default function AdminWorkspace({
               <Download size={20} className="text-brand" /> Export แพ็กเกจผู้ใช้
             </h2>
             <p className="mt-2 text-sm text-muted">
-              เขียนแพ็กเกจลง public เป็นโฟลเดอร์เวอร์ชันใหม่ เช่น aksorn-statistics-v01 — ของเก่าไม่ถูกลบ
+              ดาวน์โหลด ZIP ลงเครื่อง เช่น aksorn-statistics-v01.zip — แตกแล้วเปิด index.html หรืออัปขึ้น server ได้
             </p>
           </div>
           <div className="flex flex-wrap items-end gap-3">
@@ -1297,7 +1296,7 @@ export default function AdminWorkspace({
               className="rounded-xl bg-brand px-5 py-3.5 text-sm font-bold text-white disabled:opacity-50"
             >
               <Download className="mr-2 inline" size={16} />
-              {exporting ? 'กำลัง Export...' : 'Export ไป public'}
+              {exporting ? 'กำลัง Export...' : 'ดาวน์โหลด ZIP'}
             </button>
           </div>
         </div>
