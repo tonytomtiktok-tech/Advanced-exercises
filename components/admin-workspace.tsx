@@ -21,7 +21,6 @@ import {
   normalizeSkillName,
   parsePromptVideoUrl,
 } from '@/lib/mock';
-import {exportUserPackage} from '@/lib/export-package';
 import {
   exportExamSetPackage,
   isExamSetPackage,
@@ -142,7 +141,6 @@ export default function AdminWorkspace({
   const [newQ, setNewQ] = useState({...blankQ});
   const [editingId, setEditingId] = useState<number | null>(null);
   const [exportSetId, setExportSetId] = useState(1);
-  const [exporting, setExporting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [selectedBankIds, setSelectedBankIds] = useState<number[]>([]);
   const [assignConfirm, setAssignConfirm] = useState<{
@@ -1217,24 +1215,7 @@ export default function AdminWorkspace({
   }
 
   async function handleExport() {
-    const target = sets.find((s) => s.id === exportSetId);
-    if (!target) {
-      alert('ไม่พบชุดกิจกรรม');
-      return;
-    }
-    const qs = getOrderedSetQuestions(target, questions, sets);
-    setExporting(true);
-    try {
-      const result = await exportUserPackage(target, qs, categories);
-      alert(
-        `ดาวน์โหลดแล้ว ${result.versionLabel}\nไฟล์: ${result.filename}\n\nแตก ZIP แล้วเปิด index.html ด้วยเบราว์เซอร์ หรืออัปโฟลเดอร์ขึ้น server ได้`,
-      );
-    } catch (e) {
-      console.error(e);
-      alert(e instanceof Error ? e.message : 'Export ไม่สำเร็จ กรุณาลองใหม่');
-    } finally {
-      setExporting(false);
-    }
+    alert('อยู่ระหว่างดำเนินการ');
   }
 
   return (
@@ -1271,7 +1252,7 @@ export default function AdminWorkspace({
               <Download size={20} className="text-brand" /> Export แพ็กเกจผู้ใช้
             </h2>
             <p className="mt-2 text-sm text-muted">
-              ดาวน์โหลด ZIP ลงเครื่อง เช่น aksorn-statistics-v01.zip — แตกแล้วเปิด index.html หรืออัปขึ้น server ได้
+              ดาวน์โหลด ZIP ลงเครื่อง (อยู่ระหว่างดำเนินการ)
             </p>
           </div>
           <div className="flex flex-wrap items-end gap-3">
@@ -1291,12 +1272,11 @@ export default function AdminWorkspace({
             </label>
             <button
               type="button"
-              disabled={exporting}
               onClick={handleExport}
-              className="rounded-xl bg-brand px-5 py-3.5 text-sm font-bold text-white disabled:opacity-50"
+              className="rounded-xl bg-brand px-5 py-3.5 text-sm font-bold text-white"
             >
               <Download className="mr-2 inline" size={16} />
-              {exporting ? 'กำลัง Export...' : 'ดาวน์โหลด ZIP'}
+              ดาวน์โหลด ZIP
             </button>
           </div>
         </div>
